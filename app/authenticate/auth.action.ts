@@ -8,6 +8,8 @@ import { lucia } from "@/lib/lucia";
 import { cookies } from "next/headers";
 import { signInSchema } from "@/components/sign-in-form";
 import { redirect } from "next/navigation";
+import { generateCodeVerifier, generateState } from "arctic";
+import { googleOauthClient } from "@/lib/google-oauth";
 export async function signUp(values: z.infer<typeof signUpSchema>) {
   // TODO: Should i use safeParse here?
   console.log("sign up values: ", values);
@@ -153,4 +155,35 @@ export const logOut = async () => {
   );
 
   return redirect("/authenticate");
+};
+
+export const getGoogleOauthConsentUrl = async () => {
+  try {
+    // generate state with arctic
+    const state = generateState();
+    const codeVerifier = generateCodeVerifier();
+
+    cookies().set("code_verifier", codeVerifier, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+    });
+
+    cookies().set("state", state, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+    });
+
+    const authUrl = await googleOauthClient.createAuthorizationURL(
+      state,
+      codeVerifier,
+      {
+        // what to get from user
+        scopes: ["email", "profile"],
+      }
+    );
+
+    return { success: true, url: authUrl };
+  } catch (error) {
+    return { success: false, error: `Something went wrong: ${error}` };
+  }
 };
