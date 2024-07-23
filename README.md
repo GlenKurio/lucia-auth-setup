@@ -9,6 +9,173 @@ npx prisma init --datasource-provider sqlite
 ```
 
 ===========
+Lucia Credentials Auth
+===========
+
+1. Initialize Prisma and define models:
+
+```prisma
+
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String    @id @default(cuid())
+  email          String    @unique
+  name           String
+  role           String? // no enums in SQLite
+  hashedPassword String?
+  Session        Session[]
+}
+
+model Session {
+  id        String   @id
+  userId    String
+  expiresAt DateTime
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+```
+
+2. Create global db instance
+3. Create signUp function in auth actions with oslo for password ashing
+
+```sh
+npm i oslo
+```
+
+<!-- Add this to next.config for oslo to work properly -->
+
+```ts
+// next.config.ts
+const nextConfig = {
+  webpack: (config) => {
+    config.externals.push("@node-rs/argon2", "@node-rs/bcrypt");
+    return config;
+  },
+};
+```
+
+```ts
+export async function signUp(values: z.infer<typeof signUpSchema>) {
+  // TODO: Should i use safeParse here?
+  console.log("sign up values: ", values);
+  try {
+    const existingUser = await db.user.findUnique({
+      where: {
+        email: values.email,
+      },
+    });
+
+    if (existingUser) {
+      return {
+        success: false,
+        error: "User already exists",
+      };
+    }
+    // remember to make changes to next config file for this to work properly
+    const hashedPassword = await new Argon2id().hash(values.password);
+
+    const user = await db.user.create({
+      data: {
+        name: values.name,
+        email: values.email.toLowerCase(),
+        hashedPassword,
+      },
+    });
+  } catch (error: any) {
+    return {
+      success: false,
+      error: error.message,
+    };
+  }
+}
+```
+
+4. Create global lucia object to be able to create sessions, with prisma adaptrer (or any other db adapter) to allow lucia read and write session and user from/to db:
+
+```ts
+import { Lucia } from "lucia";
+// install prisma adapter
+import { PrismaAdapter } from "@lucia-auth/adapter-prisma";
+import { db } from "./db";
+// initialize prisma adapter with session and user tables
+const adapter = new PrismaAdapter(db.session, db.user);
+
+export const lucia = new Lucia(adapter, {
+  sessionCookie: {
+    name: "singapore-auth-cookie",
+    expires: false, // might be not the best idea
+    attributes: {
+      secure: process.env.NODE_ENV === "production",
+    },
+  },
+});
+```
+
+5. Create session in signUp action:
+
+```ts
+export async function signUp(values: z.infer<typeof signUpSchema>) {
+  // TODO: Should i use safeParse here?
+  console.log("sign up values: ", values);
+  try {
+    const existingUser = await db.user.findUnique({
+      where: {
+        email: values.email,
+      },
+    });
+
+    if (existingUser) {
+      return {
+        success: false,
+        error: "User already exists",
+      };
+    }
+    // remember to make changes to next config file for this to work properly
+    const hashedPassword = await new Argon2id().hash(values.password);
+
+    const user = await db.user.create({
+      data: {
+        name: values.name,
+        email: values.email.toLowerCase(),
+        hashedPassword,
+      },
+    });
+
+    // CREATE SESSION WITH LUCIA
+    // create session with our global lucia
+    const session = await lucia.createSession(user.id, {});
+    // create session cookie
+    const sessionCookie = await lucia.createSessionCookie(session.id);
+
+    cookies().set(
+      sessionCookie.name,
+      sessionCookie.value,
+      sessionCookie.attributes
+    );
+
+    return {
+      success: true,
+    };
+  } catch (error: any) {
+    return {
+      success: false,
+      error: error.message,
+    };
+  }
+}
+```
+
+===========
 Google Oauth
 ===========
 
@@ -159,3 +326,13 @@ export async function GET(req: NextRequest, res: NextResponse) {
 ```
 
 Done.
+
+=============
+Questions
+=============
+
+- How to make lucia work with next middleware ?
+- How to merge accounts ?
+- How to fix ts error with URL type in google oauth btn ?
+- Is google oauth link needs to be updated manually ? How often do they change it ?
+- How to make magic-link sign-in ?
